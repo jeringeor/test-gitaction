@@ -1,0 +1,67 @@
+name: Multi-Arch Docker Build & GHCR Push with Scout Scan
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write  # Required for pushing to GHCR
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            tag: amd64
+          - platform: linux/arm64
+            tag: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Write Dockerfile
+        run: |
+          cat <<EOF > Dockerfile
+          # syntax=docker/dockerfile:1
+          FROM node:18-slim
+          WORKDIR /app
+          COPY package*.json ./
+          RUN npm ci --omit=dev
+          COPY . .
+          EXPOSE 80
+          CMD ["npm", "start"]
+          EOF
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.username }}
+          password: ${{ secrets.token }}
+
+      - name: Build and Push Docker Image for ${{ matrix.platform }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ matrix.tag }}
+
+      - name: Docker Scout CVE Scan for ${{ matrix.platform }}
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: ghcr.io/${{ github.repository }}:${{ matrix.tag }}
+          platform: ${{ matrix.platform }}
+          dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_PASSWORD }}
